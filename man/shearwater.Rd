@@ -5,19 +5,26 @@
 \alias{shearwater}
 \title{Bayesian beta-binomal test, codename shearwater}
 \usage{
-bbb(counts, rho = NULL, alternative = "greater", truncate = 0.1,
-  rho.min = 1e-04, rho.max = 0.1, pseudo = .Machine$double.eps,
-  return.value = c("BF", "P0", "err"), model = c("OR", "AND", "adaptive"),
-  min.cov = NULL, max.odds = 10, mu.min = 1e-06, mu.max = 1 - mu.min)
+bbb(counts, truncate = 0.1, sample_structure = NULL, normal.N = NULL,
+  normal.X = NULL, rho = NULL, alternative = "greater", rho.min = 1e-04,
+  rho.max = 0.1, pseudo = .Machine$double.eps, return.value = c("BF",
+  "P0", "err"), model = c("OR", "AND", "adaptive"), min.cov = NULL,
+  max.odds = 10, mu.min = 1e-06, mu.max = 1 - mu.min)
 }
 \arguments{
 \item{counts}{An \code{\link{array}} of nucleotide counts (samples x positions x 10 nucleotides in forward and reverse orientation), typically from \code{\link{loadAllData}}}
 
-\item{rho}{Disperision factor. If NULL, estimated from the data.}
+\item{truncate}{The model uses a compound control sample which is the sum of all samples with a relative nucleotide frequency below truncate at this locus. Default = 0.1.}
+
+\item{sample_structure}{An integer vector specifying related samples. Should consist of individual numbers for independent samples and same number for samples that should not be compared to each other. Default is \code{1:nrow(counts)}.}
+
+\item{normal.N}{An integer matrix of aggregated coverages of normal samples with errouneous reads per site.}
+
+\item{normal.X}{An integer matrix of aggregated errouneous counts per site in normal samples.}
+
+\item{rho}{Dispersion factor. If NULL, estimated from the data.}
 
 \item{alternative}{The alternative. Currently only "greater" is implemented.}
-
-\item{truncate}{The model uses a compound control sample which is the sum of all samples with a relative nucleotide frequency below truncate at this locus. Default = 0.1.}
 
 \item{rho.min}{Lower bound for the method of moment estimate of the dispersion factor rho.}
 
@@ -27,11 +34,11 @@ bbb(counts, rho = NULL, alternative = "greater", truncate = 0.1,
 
 \item{return.value}{Return value. Either "BF" for Bayes Factor of "P0" for the posterior probability (assuming a prior of 0.5).}
 
-\item{model}{The null model to use. For "OR" it requires the alternative model to be violated on either of the strands, for "AND" the null is specified such that the error rates of the sample 
-of interest and the compound control sample are identical on both strands. "AND" typically yield many more calls. The most recent addition is "adaptive", which switches from "OR" to "AND", if the coverage 
+\item{model}{The null model to use. For "OR" it requires the alternative model to be violated on either of the strands, for "AND" the null is specified such that the error rates of the sample
+of interest and the compound control sample are identical on both strands. "AND" typically yield many more calls. The most recent addition is "adaptive", which switches from "OR" to "AND", if the coverage
 is less than min.cov, or if the odds of forward and reverse coverage is greater than max.odds. Default = "OR".}
 
-\item{min.cov}{Minimal coverage to swith from OR to AND, if model is "adaptive"}
+\item{min.cov}{Minimal coverage to switch from OR to AND, if model is "adaptive"}
 
 \item{max.odds}{Maximal odds before switching from OR to AND if model is "adaptive" and min.cov=NULL.}
 
@@ -64,5 +71,5 @@ dpSNV <- deepSNV(test = files[1], control = files[2], regions=regions, q=10)
 plot(p.val(dpSNV), bf[1,,]/(1+bf[1,,]), log="xy")
 }
 \author{
-mg14
+mg14, nvolkova
 }

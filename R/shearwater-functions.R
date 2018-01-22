@@ -301,124 +301,168 @@ logbb <- function(x, n, mu, disp) {
 	lbeta(x + mu, n - x - mu + disp) - lbeta(mu, disp - mu)
 }
 
+#' Implementing lower and upper bound simultaneously
+#' @param x Vector of numbers
+#' @param xmin Lower bound
+#' @param xmax Upper bound
+#' @return Constrained vector
+#' @noRd
+#'
+#' @author mg14
+#' @note Experimental code, subject to changes
+bound = function(x, xmin, xmax) {
+  x = pmax(x, xmin)
+  x = pmin(x, xmax)
+  return(x)
+}
+
+
 #' Bayesian beta-binomal test, codename shearwater
 #' 
 #' This is the workhorse of the shearwater test. It computes the Bayes factor for each sample, nucleotide and position of the null-model vs. the alternative of a real variant.
 #' @param counts An \code{\link{array}} of nucleotide counts (samples x positions x 10 nucleotides in forward and reverse orientation), typically from \code{\link{loadAllData}}
+#' @param sample_structure An integer vector specifying related samples. Should consist of individual numbers for independent samples and same number for samples that should not be compared to each other. Default is \code{1:nrow(counts)}.
 #' @param truncate The model uses a compound control sample which is the sum of all samples with a relative nucleotide frequency below truncate at this locus. Default = 0.1.
+#' @param normal.X An integer matrix of aggregated errouneous counts per site in normal samples.
+#' @param normal.N An integer matrix of aggregated coverages of normal samples with errouneous reads per site.
 #' @param alternative The alternative. Currently only "greater" is implemented.
-#' @param rho Disperision factor. If NULL, estimated from the data.
+#' @param rho Dispersion factor. If NULL, estimated from the data.
 #' @param rho.min Lower bound for the method of moment estimate of the dispersion factor rho.
 #' @param rho.max Upper bound for the method of moment estimate of the dispersion factor rho.
 #' @param mu.min Minimum of the error rate mu.
 #' @param mu.max Maximal error rate mu.
 #' @param pseudo A pseudo count to be added to the counts to avoid problems with zeros.
 #' @param return.value Return value. Either "BF" for Bayes Factor of "P0" for the posterior probability (assuming a prior of 0.5).
-#' @param model The null model to use. For "OR" it requires the alternative model to be violated on either of the strands, for "AND" the null is specified such that the error rates of the sample 
-#' of interest and the compound control sample are identical on both strands. "AND" typically yield many more calls. The most recent addition is "adaptive", which switches from "OR" to "AND", if the coverage 
+#' @param model The null model to use. For "OR" it requires the alternative model to be violated on either of the strands, for "AND" the null is specified such that the error rates of the sample
+#' of interest and the compound control sample are identical on both strands. "AND" typically yield many more calls. The most recent addition is "adaptive", which switches from "OR" to "AND", if the coverage
 #' is less than min.cov, or if the odds of forward and reverse coverage is greater than max.odds. Default = "OR".
-#' @param min.cov Minimal coverage to swith from OR to AND, if model is "adaptive"
+#' @param min.cov Minimal coverage to switch from OR to AND, if model is "adaptive"
 #' @param max.odds Maximal odds before switching from OR to AND if model is "adaptive" and min.cov=NULL.
 #' @return An \code{\link{array}} of Bayes factors
 #' @example inst/example/shearwater-example.R
-#' 
-#' @author mg14
+#'
+#' @author mg14, nvolkova
 #' @rdname shearwater
 #' @aliases shearwater
 #' @note Experimental code, subject to changes
 #' @export
-bbb <- function(counts, rho = NULL, alternative="greater", truncate=0.1, rho.min = 1e-4, rho.max = 0.1, pseudo = .Machine$double.eps, return.value=c("BF","P0", "err"), model=c("OR","AND", "adaptive"), min.cov=NULL, max.odds=10, mu.min = 1e-6, mu.max = 1 - mu.min) {
+#'
+bbb <- function(counts, # nucleotide counts, samples x positions x 10 nucleotides (A,G,C,T,D,a,g,c,t,d)
+                 truncate=0.1,
+                 sample_structure=NULL,
+                 normal.N=NULL,
+                 normal.X=NULL,
+                 rho = NULL, # dispersion factor that can be estimated from data
+                 alternative = "greater", # alternative model specification
+                 rho.min = 1e-04, # lower bound for method of moments estimate of rho
+                 rho.max = 0.1, # upper bound for method of moments estimate of rho
+                 pseudo = .Machine$double.eps, # addition to avoid zero division problems
+                 return.value = c("BF", "P0", "err"), # return value: "BF" for Bayesian factor, "P0" for posterior probability assuming prior of 0.5
+                 model = c("OR", "AND", "adaptive"), # null model: alternative is violated on either of strands, both strands or as determined by coverage
+                 min.cov = NULL, # minimal coverage to switch from OR to AND model in adaptive mode
+                 max.odds = 10, # max odds before switching from OR to AND in adaptive mode with no min.cov
+                 mu.min = 1e-06, # min error rate
+                 mu.max = 1 - mu.min) # max error rate
+{
 	pseudo.rho = .Machine$double.eps
-	## minum value for rho
-	
-	model = match.arg(model)
-	return.value = match.arg(return.value)
-	
-	ncol = dim(counts)[3]/2
-	
-	x.fw = counts[,,1:ncol, drop=FALSE]
-	x.bw = counts[,,1:ncol + ncol, drop=FALSE]
-	
-	n.fw = rep(rowSums(x.fw, dims=2), dim(x.fw)[3])
-	n.bw = rep(rowSums(x.bw, dims=2), dim(x.bw)[3])
-	
-	
-	x <- x.fw+x.bw
-	n = array(n.fw + n.bw, dim=dim(x)[1:2])
-	mu = (x + pseudo.rho) / (rep(n + ncol*pseudo.rho, dim(x)[3]) )
-	ix = (mu < truncate)
-	if(is.null(rho)){
-		rho = estimateRho(x, mu, ix)
-		rho = pmin(pmax(rho, rho.min), rho.max)
-		rho[is.na(rho)] = rho.min
-		
-	}
-	X =  colSums(x, dims=1)
-	#rm(x)
-	
-	bound = function(x, xmin, xmax){
-		x = pmax(x, xmin)
-		x = pmin(x, xmax)
-		return(x)
-	}
-	
-	disp = (1-rho)/rho 
-	rdisp <- rep(disp, each=nrow(counts))
-	mu = (x + pseudo) / (rep(n + ncol*pseudo, dim(x)[3]) ) ## sample rate forward+bwackward (true allele frequency)
-	mu = bound(mu, mu.min, mu.max) * rdisp
-	tr.fw = x.fw * ix
-	
-	X.fw = rep(colSums(tr.fw, dims=1), each = nrow(counts)) - tr.fw ## control samples
-	N.fw = rep(colSums(n.fw * ix), each = nrow(counts)) - n.fw * ix
-	#nu0.fw <- array(rep((colSums(tr.fw) +pseudo) / (colSums(n.fw * ix) + ncol*pseudo) * disp, each = nrow(tr.fw)), dim = dim(tr.fw)) * mumax
-	nu0.fw <- (X.fw + x.fw + pseudo)/(N.fw + n.fw + ncol*pseudo)
-	nu0.fw <- bound(nu0.fw, mu.min, mu.max)* rdisp
-	mu0.bw <- (x.bw+pseudo) / (n.bw + ncol*pseudo) 
-	mu0.bw <- bound(mu0.bw, mu.min, mu.max) * rdisp
-	nu.fw <- (X.fw+pseudo) / (N.fw + ncol*pseudo)
-	nu.fw <- bound(nu.fw, mu.min, mu.max) * rdisp
-	
-	tr.bw = x.bw * ix
-	X.bw = rep(colSums(tr.bw, dims=1), each = nrow(counts)) - tr.bw 
-	N.bw = rep(colSums(n.bw * ix), each = nrow(counts)) - n.bw * ix
-	#nu0.bw <- array(rep((colSums(tr.bw) + pseudo) / (colSums(n.bw * ix) + ncol*pseudo) * disp, each = nrow(tr.bw)), dim = dim(tr.bw)) * mumax
-	nu0.bw <- (X.bw + x.bw + pseudo)/(N.bw + n.bw + ncol*pseudo)
-	nu0.bw <- bound(nu0.bw, mu.min, mu.max) * rdisp
-	mu0.fw <- (x.fw+pseudo) / (n.fw +  ncol*pseudo)
-	mu0.fw <- bound(mu0.fw, mu.min, mu.max) * rdisp
-	nu.bw <- (X.bw+pseudo) / (N.bw + ncol*pseudo) 
-	nu.bw <- bound(nu.bw, mu.min, mu.max) * rdisp
-	
+  model = match.arg(model)
+  return.value = match.arg(return.value)
+
+  ncol = dim(counts)[3]/2
+  x.fw = counts[, , 1:ncol, drop = FALSE]
+  x.bw = counts[, , 1:ncol + ncol, drop = FALSE]
+  n.fw = rep(rowSums(x.fw, dims = 2), dim(x.fw)[3])
+  n.bw = rep(rowSums(x.bw, dims = 2), dim(x.bw)[3])
+
+  if (is.null(sample_structure)) sample_structure = c(1:nrow(counts))
+
+  x <- x.fw + x.bw
+  n = array(n.fw + n.bw, dim = dim(x)[1:2])
+  mu = (x + pseudo.rho)/(rep(n + ncol * pseudo.rho, dim(x)[3]))
+  ix = (mu < truncate) # including samples into control or not
+
+  if (is.null(rho)) {
+    rho = estimateRho(x, mu, ix)
+    rho = pmin(pmax(rho, rho.min), rho.max)
+    rho[is.na(rho)] = rho.min
+  } else {
+    rho = matrix(rho, nrow = dim(mu)[2], ncol = dim(mu)[3])
+  }
+
+  X = colSums(x, dims = 1) # counts per mutation type per sample
+
+  disp = (1 - rho)/rho
+  rdisp <- rep(disp, each = nrow(counts))
+  mu = bound(mu, mu.min, mu.max) * rdisp
+
+  tr.fw = x.fw * ix
+  tr.bw = x.bw * ix
+
+  X.fw = rep(colSums(tr.fw, dims = 1), each = nrow(counts)) - array(outer(sample_structure,sample_structure,'==') %*% matrix(tr.fw,nrow=nrow(tr.fw)),dim=dim(tr.fw))
+  N.fw = rep(colSums(n.fw * ix), each = nrow(counts)) - array(outer(sample_structure,sample_structure,'==') %*% matrix(n.fw*ix,nrow=nrow(counts)), dim=dim(ix))
+  X.bw = rep(colSums(tr.bw, dims = 1), each = nrow(counts)) - array(outer(sample_structure,sample_structure,'==') %*% matrix(tr.bw,nrow=nrow(tr.bw)),dim=dim(tr.bw))
+  N.bw = rep(colSums(n.bw * ix), each = nrow(counts)) - array(outer(sample_structure,sample_structure,'==') %*% matrix(n.bw*ix,nrow=nrow(counts)), dim=dim(ix))
+  
+  if (!is.null(normal.N)) {
+    X.fw <- X.fw + aperm(array(rep(normal.X[,1:ncol,drop=F], dim(X.fw)[1]),dim=c(nrow(normal.X),ncol,dim(X.fw)[1])), perm=c(3,1,2))
+    N.fw <- N.fw + aperm(array(rep(normal.N[,1:ncol,drop=F], dim(N.fw)[1]),dim=c(nrow(normal.N),ncol,dim(N.fw)[1])), perm=c(3,1,2))
+    X.bw <- X.bw + aperm(array(rep(normal.X[,1:ncol,drop=F], dim(X.bw)[1]),dim=c(nrow(normal.X),ncol,dim(X.bw)[1])), perm=c(3,1,2))
+    N.bw <- N.bw + aperm(array(rep(normal.N[,1:ncol,drop=F], dim(N.bw)[1]),dim=c(nrow(normal.N),ncol,dim(N.bw)[1])), perm=c(3,1,2))
+  }
+
+  nu0.fw <- (X.fw + x.fw + pseudo)/(N.fw + n.fw + ncol * pseudo); nu0.fw <- bound(nu0.fw, mu.min, mu.max) * rdisp
+  nu0.bw <- (X.bw + x.bw + pseudo)/(N.bw + n.bw + ncol * pseudo); nu0.bw <- bound(nu0.bw, mu.min, mu.max) * rdisp
+
+  mu0.fw <- (x.fw + pseudo)/(n.fw + ncol * pseudo); mu0.fw <- bound(mu0.fw, mu.min, mu.max) * rdisp
+  mu0.bw <- (x.bw + pseudo)/(n.bw + ncol * pseudo); mu0.bw <- bound(mu0.bw, mu.min, mu.max) * rdisp
+  nu.fw <- (X.fw + pseudo)/(N.fw + ncol * pseudo); nu.fw <- bound(nu.fw, mu.min, mu.max) * rdisp
+  nu.bw <- (X.bw + pseudo)/(N.bw + ncol * pseudo); nu.bw <- bound(nu.bw, mu.min, mu.max) * rdisp
+  
+  	
 	## Return rates only
 	if(return.value == "err"){ 
 		nu0 <- (X.bw + tr.fw + X.fw + tr.bw+ pseudo)/(N.bw + n.bw +N.fw +n.fw+ ncol*pseudo)
 		nu0 <- bound(nu0, mu.min, mu.max)
 		return(list(nu = nu0[1,,], nu.fw=(nu0.fw/rdisp)[1,,], nu.bw=(nu0.bw/rdisp)[1,,], rho=rho))
 	}
-	rm(tr.fw)
-	rm(tr.bw)
-	
-	## Enforce mu > nu
-	mu = pmax(mu, nu0.fw)
-	mu = pmax(mu, nu0.bw)
-	
-	mu0.fw = pmax(mu0.fw, nu0.fw)
-	mu0.bw = pmax(mu0.bw, nu0.bw)
+  
+  rm(tr.fw,tr.bw)
+  ## Enforce mu > nu
+  mu = pmax(pmax(mu, nu0.fw),nu0.bw)
+  mu0.fw = pmax(mu0.fw, nu0.fw)
+  mu0.bw = pmax(mu0.bw, nu0.bw)
+
 	
 	if(model %in% c("OR","adaptive")){
 		## Bayes factor forward
-		Bf.fw <- logbb(x.fw, n.fw, nu0.fw, rdisp) + logbb(x.bw, n.bw, mu0.bw, rdisp) + logbb(X.fw, N.fw, nu0.fw, rdisp) - logbb(x.fw, n.fw, mu, rdisp) - logbb(x.bw, n.bw, mu, rdisp) - logbb(X.fw, N.fw, nu.fw, rdisp)
+		Bf.fw <- logbb(x.fw, n.fw, nu0.fw, rdisp) + 
+				 logbb(x.bw, n.bw, mu0.bw, rdisp) + 
+				 logbb(X.fw, N.fw, nu0.fw, rdisp) - 
+				 logbb(x.fw, n.fw, mu, rdisp) - 
+				 logbb(x.bw, n.bw, mu, rdisp) - 
+				 logbb(X.fw, N.fw, nu.fw, rdisp)
 		Bf.fw = exp(Bf.fw)
 		
-		Bf.both = logbb(x.fw, n.fw, nu0.fw, rdisp) + logbb(X.fw, N.fw, nu0.fw, rdisp) - logbb(x.fw, n.fw, mu, rdisp) - logbb(X.fw, N.fw, nu.fw, rdisp)
+		Bf.both = logbb(x.fw, n.fw, nu0.fw, rdisp) + 
+				  logbb(X.fw, N.fw, nu0.fw, rdisp) - 
+				  logbb(x.fw, n.fw, mu, rdisp) - 
+				  logbb(X.fw, N.fw, nu.fw, rdisp)
 		
 		rm(X.fw, N.fw, mu0.bw, nu.fw)
 		
 		## Bayes factor reverse
-		Bf.bw <- logbb(x.fw, n.fw, mu0.fw, rdisp) + logbb(x.bw, n.bw, nu0.bw, rdisp) + logbb(X.bw, N.bw, nu0.bw, rdisp) - logbb(x.fw, n.fw, mu, rdisp) - logbb(x.bw, n.bw, mu, rdisp) - logbb(X.bw, N.bw, nu.bw, rdisp)
+		Bf.bw <- logbb(x.fw, n.fw, mu0.fw, rdisp) + 
+				 logbb(x.bw, n.bw, nu0.bw, rdisp) + 
+				 logbb(X.bw, N.bw, nu0.bw, rdisp) - 
+				 logbb(x.fw, n.fw, mu, rdisp) - 
+				 logbb(x.bw, n.bw, mu, rdisp) - 
+				 logbb(X.bw, N.bw, nu.bw, rdisp)
 		Bf.bw = exp(Bf.bw)
 		
-		Bf.both = Bf.both + logbb(x.bw, n.bw, nu0.bw, rdisp) + logbb(X.bw, N.bw, nu0.bw, rdisp) - logbb(x.bw, n.bw, mu, rdisp) - logbb(X.bw, N.bw, nu.bw, rdisp)
+		Bf.both = Bf.both + logbb(x.bw, n.bw, nu0.bw, rdisp) + 
+							logbb(X.bw, N.bw, nu0.bw, rdisp) - 
+							logbb(x.bw, n.bw, mu, rdisp) - 
+							logbb(X.bw, N.bw, nu.bw, rdisp)
 		Bf.both = exp(Bf.both)
 		
 		rm(X.bw, N.bw, mu0.fw, nu.bw)
@@ -429,7 +473,14 @@ bbb <- function(counts, rho = NULL, alternative="greater", truncate=0.1, rho.min
 		
 		Bf = Bf.fw + Bf.bw - Bf.both + .Machine$double.xmin
 	}else{
-		Bf.both = logbb(x.fw, n.fw, nu0.fw, rdisp) + logbb(X.fw, N.fw, nu0.fw, rdisp) - logbb(x.fw, n.fw, mu, rdisp) - logbb(X.fw, N.fw, nu.fw, rdisp) + logbb(x.bw, n.bw, nu0.bw, rdisp) + logbb(X.bw, N.bw, nu0.bw, rdisp) - logbb(x.bw, n.bw, mu, rdisp) - logbb(X.bw, N.bw, nu.bw, rdisp)
+		Bf.both = logbb(x.fw, n.fw, nu0.fw, rdisp) + 
+				  logbb(X.fw, N.fw, nu0.fw, rdisp) - 
+				  logbb(x.fw, n.fw, mu, rdisp) - 
+				  logbb(X.fw, N.fw, nu.fw, rdisp) + 
+				  logbb(x.bw, n.bw, nu0.bw, rdisp) + 
+				  logbb(X.bw, N.bw, nu0.bw, rdisp) - 
+				  logbb(x.bw, n.bw, mu, rdisp) - 
+				  logbb(X.bw, N.bw, nu.bw, rdisp)
 		Bf = exp(Bf.both)
 	}
 	
@@ -443,7 +494,7 @@ bbb <- function(counts, rho = NULL, alternative="greater", truncate=0.1, rho.min
 	
 	#Bf[f.se.g] = Inf
 	## If smaller, take H0
-	cons= apply(X,1, which.max)
+	cons = apply(X,1, which.max)
 	for(i in 1:ncol(Bf))
 		Bf[,i,cons[i]] = NA
 	
